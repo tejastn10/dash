@@ -159,6 +159,10 @@
 	}
 }
 
+* {
+	user-select: none;
+}
+
 h3 code {
 	@apply text-lg! md:text-xl!;
 }

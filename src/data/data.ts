@@ -1,4 +1,4 @@
 export const DATA = {
-	name: "arbor",
+	name: "dash",
 	description: "",
 } as const;

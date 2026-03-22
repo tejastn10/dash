@@ -1,21 +1,23 @@
 import type { NextRequest } from "next/server";
+import { CRYPTO_CHUNK_SIZE, MAX_DOWNLOAD_SIZE_MB, MIN_DOWNLOAD_SIZE_MB } from "@/constants/speedTest";
 
 export const GET = async (request: NextRequest) => {
 	const searchParams = request.nextUrl.searchParams;
 	const sizeParam = searchParams.get("size");
-	const sizeMB = parseInt(sizeParam || "1", 10);
+	const sizeMB = Math.min(
+		Math.max(parseInt(sizeParam || "1", 10), MIN_DOWNLOAD_SIZE_MB),
+		MAX_DOWNLOAD_SIZE_MB
+	);
 
-	// Generate random data of specified size
 	const sizeBytes = sizeMB * 1024 * 1024;
-	const buffer = new ArrayBuffer(sizeBytes);
-	const view = new Uint8Array(buffer);
+	const view = new Uint8Array(sizeBytes);
 
-	// Fill with random data to prevent compression
-	for (let i = 0; i < sizeBytes; i++) {
-		view[i] = Math.floor(Math.random() * 256);
+	// crypto.getRandomValues has a 64KB max per call — fill in chunks
+	for (let offset = 0; offset < sizeBytes; offset += CRYPTO_CHUNK_SIZE) {
+		crypto.getRandomValues(view.subarray(offset, offset + CRYPTO_CHUNK_SIZE));
 	}
 
-	return new Response(buffer, {
+	return new Response(view, {
 		headers: {
 			"Content-Type": "application/octet-stream",
 			"Content-Length": sizeBytes.toString(),

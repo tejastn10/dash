@@ -1,200 +1,219 @@
 "use client";
 
 import { useState } from "react";
-import { cx } from "@/utils/tailwind";
+import { GAUGE_START_DEG, GAUGE_SWEEP_DEG, MAX_GAUGE_MBPS } from "@/constants/gauge";
+import { PHASE_LABELS, TESTING_PHASES } from "@/constants/phases";
+import { DOWNLOAD_TEST_SIZES_MB, UPLOAD_SIZE_BYTES } from "@/constants/speedTest";
+import { useCountUp } from "@/hooks/useCountUp";
+import { Phase, type StatBoxProps } from "@/types/speedTest";
+import { latencyColor, speedColor } from "@/utils/color";
+import { formatSpeed } from "@/utils/format";
+import { arcPath } from "@/utils/gauge";
 
 export default function Home() {
+	const [phase, setPhase] = useState<Phase>(Phase.Idle);
 	const [speed, setSpeed] = useState<number | null>(null);
-
-	const [isLoading, setIsLoading] = useState(false);
-	const [loadingProgress, setLoadingProgress] = useState(0);
-
-	const [status, setStatus] = useState<"idle" | "testing" | "completed">("idle");
-
-	const [showMoreInfo, setShowMoreInfo] = useState(false);
-
-	const [latency, setLatency] = useState<number | null>(null);
 	const [uploadSpeed, setUploadSpeed] = useState<number | null>(null);
-	const [testingUpload, setTestingUpload] = useState(false);
+	const [latency, setLatency] = useState<number | null>(null);
+	const [progress, setProgress] = useState(0);
 
-	const startTest = async () => {
-		setIsLoading(true);
-		setStatus("testing");
+	const displayedSpeed = useCountUp(speed);
+	const isCompleted = phase === Phase.Completed;
+	const isTesting = phase !== Phase.Idle && phase !== Phase.Completed;
+
+	const arcColor = isCompleted ? speedColor(speed) : "#ffffff";
+	const fillSweep = Math.min(displayedSpeed / MAX_GAUGE_MBPS, 1) * GAUGE_SWEEP_DEG;
+
+	const gaugeLabel =
+		displayedSpeed >= 1000 ? `${(displayedSpeed / 1000).toFixed(1)}` : String(displayedSpeed);
+	const gaugeUnit = displayedSpeed >= 1000 ? "Gbps" : "Mbps";
+
+	const run = async () => {
+		setPhase(Phase.Latency);
 		setSpeed(null);
-		setLatency(null);
 		setUploadSpeed(null);
-		setLoadingProgress(0);
-		setTestingUpload(false);
+		setLatency(null);
+		setProgress(0);
 
 		try {
-			// Latency
-			const latencyStart = performance.now();
+			const t0 = performance.now();
 			await fetch("/api/ping");
-			const latencyEnd = performance.now();
-			setLatency(Math.round(latencyEnd - latencyStart));
+			setLatency(Math.round(performance.now() - t0));
+			setProgress(10);
 
-			// Download speed
-			const testSizes = [1, 5, 10, 25]; // MB
-			let maxSpeed = 0;
+			setPhase(Phase.Download);
+			let runningMax = 0;
+			await Promise.all(
+				DOWNLOAD_TEST_SIZES_MB.map(async (size) => {
+					const start = performance.now();
+					const res = await fetch(`/api/download?size=${size}`);
+					const blob = await res.blob();
+					const duration = (performance.now() - start) / 1000;
+					const mbps = (blob.size * 8) / (1024 * 1024) / duration;
+					runningMax = Math.max(runningMax, mbps);
+					setSpeed(Math.round(runningMax));
+				})
+			);
+			setProgress(60);
 
-			for (let i = 0; i < testSizes.length; i++) {
-				const size = testSizes[i];
-				const startTime = performance.now();
-				const response = await fetch(`/api/download?size=${size}`);
-				const data = await response.blob();
-				const endTime = performance.now();
-
-				const duration = (endTime - startTime) / 1000;
-				const sizeInBits = data.size * 8;
-				const speedMbps = sizeInBits / (1024 * 1024) / duration;
-
-				maxSpeed = Math.max(maxSpeed, speedMbps);
-				setSpeed(Math.round(maxSpeed));
-				setLoadingProgress(((i + 1) / testSizes.length) * 50);
-			}
-
-			// Upload speed
-			setTestingUpload(true);
-			const uploadData = new Uint8Array(5 * 1024 * 1024); // 5MB
+			setPhase(Phase.Upload);
+			const uploadData = new Uint8Array(UPLOAD_SIZE_BYTES);
 			const uploadStart = performance.now();
 			await fetch("/api/upload", { method: "POST", body: uploadData });
-			const uploadEnd = performance.now();
-
-			const uploadDuration = (uploadEnd - uploadStart) / 1000;
-			const uploadMbps = (uploadData.length * 8) / (1024 * 1024) / uploadDuration;
+			const uploadMbps =
+				(uploadData.length * 8) / (1024 * 1024) / ((performance.now() - uploadStart) / 1000);
 			setUploadSpeed(Math.round(uploadMbps));
-			setLoadingProgress(100);
-		} catch (error) {
-			console.error("Speed test failed:", error);
+			setProgress(100);
+		} catch (err) {
+			console.error("Speed test failed:", err);
 		} finally {
-			setIsLoading(false);
-			setStatus("completed");
-			setTestingUpload(false);
+			setPhase(Phase.Completed);
 		}
 	};
 
-	const formatSpeed = (speed: number | null) => {
-		if (speed === null) return "—";
-		if (speed >= 1000) return `${(speed / 1000).toFixed(1)} Gbps`;
-		return `${speed.toFixed(0)} Mbps`;
-	};
-
 	return (
-		<div className="min-h-screen flex flex-col items-center justify-center px-4">
-			<div className="text-center max-w-2xl w-full">
-				{/* Logo */}
-				<div className="mb-12">
-					<h1 className="text-4xl md:text-5xl font-bold tracking-wider cursor-pointer hover:scale-105 transition-transform duration-300">
-						Dash
-					</h1>
-					<p className="text-gray-400 mt-2 text-sm">Check your internet speed instantly ⚡</p>
-				</div>
-
-				{/* Speed Display */}
-				<div className="mb-8">
-					{status === "idle" && (
-						<div className="text-7xl md:text-8xl font-thin mb-4 text-gray-600">—</div>
-					)}
-
-					{status === "testing" && (
-						<div className="text-7xl md:text-8xl fon-medium mb-4 animate-pulse">
-							{speed ? speed : 0}
-						</div>
-					)}
-
-					{status === "completed" && (
-						<div className="text-7xl md:text-8xl font-bold mb-4 text-white-400 transition-transform duration-500 transform scale-110">
-							{speed || 0}
-						</div>
-					)}
-
-					<div className="text-lg md:text-xl text-gray-400">
-						{isLoading ? (testingUpload ? "Testing upload..." : "Testing download...") : "Mbps"}
-					</div>
-				</div>
-
-				{/* Progress Bar */}
-				{isLoading && (
-					<div className="mb-8 w-full max-w-md mx-auto animate-fade-in">
-						<div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
-							<div
-								className="bg-gradient-to-r from-gray-800 via-gray-400 to-gray-100 h-2 transition-all duration-500 ease-out"
-								style={{ width: `${loadingProgress}%` }}
-							></div>
-						</div>
-					</div>
-				)}
-
-				{/* Start Button */}
-				{status === "idle" && (
-					<button
-						type="button"
-						onClick={startTest}
-						className="cursor-pointer bg-white text-black px-10 py-3 rounded-full font-medium hover:bg-gray-200 hover:scale-105 active:scale-95 transition-all duration-300 shadow-lg hover:shadow-xl"
+		<div className="min-h-screen flex flex-col items-center justify-center px-4 gap-8">
+			<div className="text-center">
+				<h1 className="text-4xl md:text-5xl font-bold tracking-wider">
+					Da
+					<span
+						className="text-2xl md:text-3xl"
+						style={{
+							color: "#facc15",
+							textShadow: "0 0 10px rgba(250,204,21,0.9), 0 0 24px rgba(250,204,21,0.5)",
+						}}
 					>
-						Start Test
-					</button>
-				)}
-
-				{/* More Info */}
-				{status === "completed" && (
-					<>
-						<button
-							type="button"
-							onClick={() => setShowMoreInfo(!showMoreInfo)}
-							className="mb-6 text-sm underline-offset-4 hover:underline cursor-pointer"
-						>
-							{showMoreInfo ? "Hide details" : "Show details"}
-						</button>
-
-						{showMoreInfo && (
-							<div
-								className={cx(
-									// base layout
-									"bg-gray-900 rounded-xl p-6 text-left max-w-lg mx-auto h-full space-y-4 transition-all duration-300 ease-out transform-gpu",
-									// border + shadows
-									"border border-gray-800 shadow-md dark:[border:1px_solid_rgba(255,255,255,.1)] dark:[box-shadow:0_-20px_80px_-20px_#ffffff1f_inset]",
-									// hover interactions
-									"hover:shadow-lg hover:scale-105 filter grayscale",
-									// extra polish
-									"overflow-hidden group animate-fade-in"
-								)}
-							>
-								<div className="grid grid-cols-2 gap-6 text-sm">
-									<InfoBox label="Download" value={formatSpeed(speed)} />
-									<InfoBox label="Upload" value={formatSpeed(uploadSpeed)} />
-									<InfoBox label="Latency" value={latency ? `${latency} ms` : "—"} />
-									<InfoBox label="Server" value="Local" />
-								</div>
-							</div>
-						)}
-
-						<div className="mt-8">
-							<button
-								type="button"
-								onClick={startTest}
-								className="cursor-pointer bg-white text-black px-10 py-3 rounded-full font-medium hover:bg-gray-200 hover:scale-105 active:scale-95 transition-all duration-300 shadow-lg hover:shadow-xl"
-							>
-								Test Again
-							</button>
-						</div>
-					</>
-				)}
+						⚡
+					</span>
+					h
+				</h1>
+				<p className="text-gray-400 mt-1 text-sm">Check your internet speed instantly</p>
 			</div>
 
-			{/* Footer */}
+			<svg viewBox="0 0 200 200" className="w-64 h-64">
+				<title>Speed gauge</title>
+				<path
+					d={arcPath(100, 100, 75, GAUGE_START_DEG, GAUGE_SWEEP_DEG)}
+					fill="none"
+					stroke="#1f2937"
+					strokeWidth={14}
+					strokeLinecap="round"
+				/>
+				{fillSweep > 0 && (
+					<path
+						d={arcPath(100, 100, 75, GAUGE_START_DEG, fillSweep)}
+						fill="none"
+						stroke={arcColor}
+						strokeWidth={14}
+						strokeLinecap="round"
+					/>
+				)}
+				<text
+					x="100"
+					y={phase === Phase.Idle ? "105" : "95"}
+					textAnchor="middle"
+					dominantBaseline="middle"
+					fill={isCompleted ? arcColor : "#ffffff"}
+					fontSize={displayedSpeed >= 1000 ? "28" : "40"}
+					fontWeight="700"
+					fontFamily="var(--font-outfit), sans-serif"
+				>
+					{phase === Phase.Idle ? "—" : gaugeLabel}
+				</text>
+				{phase !== Phase.Idle && (
+					<text
+						x="100"
+						y="125"
+						textAnchor="middle"
+						fill="#6b7280"
+						fontSize="13"
+						fontFamily="var(--font-outfit), sans-serif"
+					>
+						{isCompleted ? gaugeUnit : "..."}
+					</text>
+				)}
+			</svg>
+
+			{isTesting && (
+				<div className="flex flex-col items-center gap-3 -mt-4">
+					<p className="text-gray-400 text-sm">{PHASE_LABELS[phase]}</p>
+
+					<div className="flex items-center gap-2">
+						{TESTING_PHASES.map((p, i) => {
+							const done = TESTING_PHASES.indexOf(p) < TESTING_PHASES.indexOf(phase as (typeof TESTING_PHASES)[number]);
+							const active = p === phase;
+							return (
+								<div key={p} className="flex items-center gap-2">
+									<div
+										className={`w-2 h-2 rounded-full transition-all duration-300 ${
+											active ? "bg-white scale-125" : done ? "bg-green-400" : "bg-gray-700"
+										}`}
+									/>
+									<span
+										className={`text-xs transition-colors duration-300 ${
+											active ? "text-white" : done ? "text-green-400" : "text-gray-600"
+										}`}
+									>
+										{p.charAt(0).toUpperCase() + p.slice(1)}
+									</span>
+									{i < 2 && <div className="w-4 h-px bg-gray-700" />}
+								</div>
+							);
+						})}
+					</div>
+
+					<div className="w-64 bg-gray-800 rounded-full h-1 overflow-hidden">
+						<div
+							className="h-1 bg-white rounded-full transition-all duration-500 ease-out"
+							style={{ width: `${progress}%` }}
+						/>
+					</div>
+				</div>
+			)}
+
+			{isCompleted && (
+				<div className="grid grid-cols-3 gap-8 text-center -mt-4">
+					<StatBox icon="↓" label="Download" value={formatSpeed(speed)} color={speedColor(speed)} />
+					<StatBox
+						icon="↑"
+						label="Upload"
+						value={formatSpeed(uploadSpeed)}
+						color={speedColor(uploadSpeed)}
+					/>
+					<StatBox
+						icon="◎"
+						label="Latency"
+						value={latency !== null ? `${latency} ms` : "—"}
+						color={latencyColor(latency)}
+					/>
+				</div>
+			)}
+
+			<button
+				type="button"
+				onClick={run}
+				disabled={isTesting}
+				className="cursor-pointer bg-white text-black px-10 py-3 rounded-full font-medium hover:bg-gray-200 hover:scale-105 active:scale-95 transition-all duration-300 shadow-lg disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:bg-white"
+			>
+				{phase === Phase.Idle ? "Start Test" : isCompleted ? "Test Again" : "Testing..."}
+			</button>
+
 			<footer className="absolute bottom-4 text-xs text-gray-600">
-				<p>Made with ⚡ Dash | Internet Speed Tester</p>
+				⚡ Dash | Internet Speed Tester
 			</footer>
 		</div>
 	);
 }
 
-function InfoBox({ label, value, color }: { label: string; value: string; color?: string }) {
+function StatBox({ icon, label, value, color }: StatBoxProps) {
 	return (
-		<div className="hover:bg-gray-800 p-3 rounded-lg transition-colors duration-200">
-			<div className="text-gray-400 mb-1 text-xs uppercase tracking-wide">{label}</div>
-			<div className={`text-lg font-medium ${color || ""}`}>{value}</div>
+		<div className="flex flex-col items-center gap-1">
+			<span className="text-gray-500 text-xs">
+				{icon} {label}
+			</span>
+			<span className="text-lg font-semibold" style={{ color }}>
+				{value}
+			</span>
 		</div>
 	);
 }
